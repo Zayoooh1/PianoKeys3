@@ -34,6 +34,49 @@ black_key_width = int(white_key_width * 0.6)
 black_key_height = int(white_key_height * 0.6)
 SHADOW_OFFSET = 3  # Pixels for shadow effect
 
+# --- Control Panel Constants ---
+CONTROL_PANEL_HEIGHT = 60
+CONTROL_PANEL_Y_START = WINDOW_HEIGHT - CONTROL_PANEL_HEIGHT # Positioned at the very bottom
+CONTROL_PANEL_BG_COLOR = (30, 30, 30)
+BUTTON_TEXT_COLOR = (230, 230, 230)
+BUTTON_BASE_COLOR = (80, 80, 80)
+BUTTON_HOVER_COLOR = (110, 110, 110)
+BUTTON_WIDTH = 100
+BUTTON_HEIGHT = 40
+BUTTON_MARGIN = 10 # Margin between buttons and panel edges
+
+try:
+    control_panel_font = pygame.font.Font(None, 28) # Default font, size 28
+except Exception as e:
+    print(f"Could not load default font for control panel, using fallback pygame.font.SysFont: {e}")
+    control_panel_font = pygame.font.SysFont(pygame.font.get_default_font(), 28)
+
+control_panel_buttons = [] # List to hold button dictionaries/objects
+
+# Define button properties and initial Rects
+button_actions = ['action_start', 'action_pause', 'action_stop', 'action_toggle_mode']
+button_texts = ["Start", "Pause", "Stop", "Mode: Learning"] # Mode button text is dynamic
+
+num_buttons = len(button_actions)
+total_buttons_width = num_buttons * BUTTON_WIDTH + (num_buttons - 1) * BUTTON_MARGIN
+start_x = (WINDOW_WIDTH - total_buttons_width) // 2
+
+for i, action in enumerate(button_actions):
+    button_x = start_x + i * (BUTTON_WIDTH + BUTTON_MARGIN)
+    button_y = CONTROL_PANEL_Y_START + (CONTROL_PANEL_HEIGHT - BUTTON_HEIGHT) // 2
+
+    btn_rect = pygame.Rect(button_x, button_y, BUTTON_WIDTH, BUTTON_HEIGHT)
+
+    control_panel_buttons.append({
+        'rect': btn_rect,
+        'text': button_texts[i], # Initial text, "Mode" button will be updated
+        'action_id': action,
+        'base_color': BUTTON_BASE_COLOR,
+        'hover_color': BUTTON_HOVER_COLOR,
+        'text_color': BUTTON_TEXT_COLOR,
+        'font': control_panel_font
+    })
+
 # --- Piano Roll Constants ---
 PIANO_ROLL_LOOKAHEAD_SECONDS = 5.0  # How far ahead in time notes are prepared/visible conceptually
 PIANO_ROLL_SECONDS_ON_SCREEN = 5.0  # How many seconds of notes are visible vertically on the roll display area
@@ -267,16 +310,37 @@ feedback_flash_info = {
     'end_time_ms': 0        # pygame.time.get_ticks() value when the flash should end
 }
 
-# --- Presentation Mode State and Timing (now relies on current_mode) ---
-# current_song_time_seconds will be updated in the main loop if in PRESENTATION or LEARNING (when not paused)
-current_song_time_seconds = 0.0
-# song_start_time_ticks will be used by both modes to track song progression
-song_start_time_ticks = 0 # Stores pygame.time.get_ticks() when the song playback begins
+# --- Playback Control State Variables ---
+# song_playback_status: Manages the overall playback state of the song.
+#   'STOPPED': Song is not playing and is at the beginning.
+#   'PLAYING': Song is currently playing (time is advancing).
+#   'USER_PAUSED': Song is paused by user via control panel (not the learning mode internal pause).
+song_playback_status = 'STOPPED'
+
+# mode_switch_confirm_active: True if waiting for user to confirm (R/C/Esc) after clicking mode toggle.
+mode_switch_confirm_active = False
+# target_mode_on_confirm: Stores the mode (e.g., APP_MODES['PRESENTATION']) to switch to after user confirmation.
+target_mode_on_confirm = None
+
+# time_paused_at_ticks: Stores pygame.time.get_ticks() when user pauses the song.
+# Used to calculate the correct song_start_time_ticks upon resume, to avoid losing paused duration.
+time_paused_at_ticks = 0
+
+# --- Song Timing State (relies on current_mode and song_playback_status) ---
+current_song_time_seconds = 0.0 # Global current time of the song
+song_start_time_ticks = 0 # Pygame ticks when the song started or resumed playing
 
 # Function to reset song played states (call before starting presentation mode)
 def reset_song_played_states(notes_list):
     for note_info in notes_list:
         note_info['played'] = False
+
+def reset_learning_mode_specific_states():
+    """Resets states specific to learning mode's internal mechanics."""
+    global learning_mode_state # Ensure we are modifying the global dict
+    learning_mode_state['paused_at_time'] = None
+    learning_mode_state['notes_at_pause'].clear()
+    learning_mode_state['correctly_pressed_midi_in_pause'].clear()
 
 # Initially reset the song data if starting in presentation mode (or can be done at mode switch)
 if current_mode == APP_MODES['PRESENTATION']: # Initial reset if starting in this mode
@@ -480,6 +544,48 @@ def draw_piano_roll_notes(surface, current_time_sec, notes_list, px_per_sec,
                 pygame.draw.rect(surface, NOTE_RECT_COLOR, note_rect)
                 pygame.draw.rect(surface, NOTE_RECT_BORDER_COLOR, note_rect, 1)
 
+def draw_control_panel(surface, buttons, current_app_mode_val, app_modes_ref, mouse_pos_tuple):
+    """
+    Draws the control panel and its buttons.
+    Args:
+        surface: Pygame surface to draw on.
+        buttons: List of button dictionaries.
+        current_app_mode_val: The current mode value (e.g., APP_MODES['LEARNING']).
+        app_modes_ref: The APP_MODES dictionary itself.
+        mouse_pos_tuple: Current mouse position (x, y).
+    """
+    # Draw panel background
+    panel_rect = pygame.Rect(0, CONTROL_PANEL_Y_START, WINDOW_WIDTH, CONTROL_PANEL_HEIGHT)
+    pygame.draw.rect(surface, CONTROL_PANEL_BG_COLOR, panel_rect)
+
+    for button_info in buttons:
+        btn_rect = button_info['rect']
+        current_color = button_info['base_color']
+
+        if btn_rect.collidepoint(mouse_pos_tuple):
+            current_color = button_info['hover_color']
+
+        pygame.draw.rect(surface, current_color, btn_rect)
+        pygame.draw.rect(surface, (50,50,50), btn_rect, 1) # Thin border for definition
+
+        button_text_content = button_info['text']
+        if button_info['action_id'] == 'action_toggle_mode':
+            mode_name = "Unknown"
+            if current_app_mode_val == app_modes_ref['LEARNING']:
+                mode_name = "Learning"
+            elif current_app_mode_val == app_modes_ref['PRESENTATION']:
+                mode_name = "Presentation"
+            button_text_content = f"Mode: {mode_name}"
+            # To show what it will switch TO, could be:
+            # next_mode_name = "Presentation" if current_app_mode_val == app_modes_ref['LEARNING'] else "Learning"
+            # button_text_content = f"To: {next_mode_name}"
+
+
+        if button_info['font'] and button_text_content:
+            text_surf = button_info['font'].render(button_text_content, True, button_info['text_color'])
+            text_rect = text_surf.get_rect(center=btn_rect.center)
+            surface.blit(text_surf, text_rect)
+
 def draw_feedback_flash_overlay(surface, flash_info, first_midi_ref, num_white_keys_ref, num_black_keys_ref, white_key_w_ref, keyboard_y_start_ref, white_key_h_ref, black_key_w_ref, black_key_h_ref):
     """
     Draws a colored flash overlay on a specific key.
@@ -591,12 +697,13 @@ def draw_piano(surface, white_pressed_states, black_pressed_states):
 # Initialize Clock
 clock = pygame.time.Clock()
 
-# Reset song start time and states if starting in a mode that uses song timing
-if current_mode == APP_MODES['PRESENTATION'] or current_mode == APP_MODES['LEARNING']:
-    song_start_time_ticks = 0 # Will be set on first frame of mode execution
-    current_song_time_seconds = 0.0 # Ensure song time starts at 0 for these modes
-    reset_song_played_states(song_data) # Reset for both modes initially
-
+# Initial game state setup
+song_playback_status = 'STOPPED'  # Ensure it starts as STOPPED
+current_song_time_seconds = 0.0
+song_start_time_ticks = 0
+reset_song_played_states(song_data) # Ensure notes are initially unplayed
+reset_learning_mode_specific_states() # Ensure learning state is initially clean
+# current_mode is already set to APP_MODES['LEARNING'] by default earlier, which is fine.
 
 # Game Loop
 running = True
@@ -608,8 +715,37 @@ while running:
 
         # User input: key presses for playing notes
         if event.type == pygame.KEYDOWN:
-            if current_mode == APP_MODES['LEARNING']:
+            if mode_switch_confirm_active: # Dialog handles input first
+                if event.key == pygame.K_r: # Reset
+                    current_mode = target_mode_on_confirm
+                    song_playback_status = 'STOPPED'
+                    current_song_time_seconds = 0.0
+                    reset_song_played_states(song_data)
+                    reset_learning_mode_specific_states()
+                    mode_switch_confirm_active = False
+                    target_mode_on_confirm = None
+                elif event.key == pygame.K_c: # Continue
+                    current_mode = target_mode_on_confirm
+                    if song_playback_status == 'USER_PAUSED': # If paused by toggle action
+                        paused_duration_ticks = pygame.time.get_ticks() - time_paused_at_ticks
+                        song_start_time_ticks += paused_duration_ticks
+                        song_playback_status = 'PLAYING'
+                    if current_mode == APP_MODES['LEARNING']:
+                        reset_learning_mode_specific_states()
+                    mode_switch_confirm_active = False
+                    target_mode_on_confirm = None
+                elif event.key == pygame.K_ESCAPE: # Cancel
+                    if song_playback_status == 'USER_PAUSED': # If paused by toggle action
+                        paused_duration_ticks = pygame.time.get_ticks() - time_paused_at_ticks
+                        song_start_time_ticks += paused_duration_ticks
+                        song_playback_status = 'PLAYING' # Resume playback
+                    mode_switch_confirm_active = False
+                    target_mode_on_confirm = None
+                # Event handled by dialog, do not process further for other game actions.
+
+            elif current_mode == APP_MODES['LEARNING']:
                 if learning_mode_state['paused_at_time'] is not None: # Paused, waiting for user input
+                    # This condition implicitly means mode_switch_confirm_active is False due to the elif structure
                     pressed_midi = pc_key_to_midi_map.get(event.key)
                     expected_midi_notes_set = {n['midi_note'] for n in learning_mode_state['notes_at_pause']}
 
@@ -695,20 +831,88 @@ while running:
                     if 0 <= key_index < len(black_key_pressed_states):
                         black_key_pressed_states[key_index] = False
 
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1: # Left mouse button
+                mouse_pos = event.pos # Get click position
+
+                # Check control panel buttons first
+                clicked_action_id = None
+                for button_info in control_panel_buttons:
+                    if button_info['rect'].collidepoint(mouse_pos):
+                        clicked_action_id = button_info['action_id']
+                        break # Found clicked button
+
+                if clicked_action_id:
+                    print(f"Control panel button clicked: {clicked_action_id}") # For debugging
+
+                    # Declare globals needed for modification here if this were a separate function.
+                    # In the main loop, direct assignment to module-level globals is okay.
+                    # global song_playback_status, current_song_time_seconds, song_start_time_ticks
+                    # global mode_switch_confirm_active, target_mode_on_confirm, time_paused_at_ticks
+                    # global current_mode # learning_mode_state is a dict, modified via its reference.
+
+                    if clicked_action_id == 'action_start':
+                        if song_playback_status == 'STOPPED':
+                            current_song_time_seconds = 0.0
+                            reset_song_played_states(song_data)
+                            reset_learning_mode_specific_states()
+                            song_start_time_ticks = pygame.time.get_ticks()
+                        elif song_playback_status == 'USER_PAUSED':
+                            # Adjust song_start_time_ticks to account for the time spent paused
+                            paused_duration_ticks = pygame.time.get_ticks() - time_paused_at_ticks
+                            song_start_time_ticks += paused_duration_ticks
+
+                        song_playback_status = 'PLAYING'
+                        if current_mode == APP_MODES['LEARNING']:
+                            learning_mode_state['paused_at_time'] = None # Ensure learning mode internal pause is also cleared
+
+                    elif clicked_action_id == 'action_pause':
+                        can_user_pause = True
+                        if current_mode == APP_MODES['LEARNING'] and learning_mode_state['paused_at_time'] is not None:
+                            can_user_pause = False # Learning mode is already internally paused
+
+                        if song_playback_status == 'PLAYING' and can_user_pause:
+                            song_playback_status = 'USER_PAUSED'
+                            time_paused_at_ticks = pygame.time.get_ticks()
+
+                    elif clicked_action_id == 'action_stop':
+                        song_playback_status = 'STOPPED'
+                        current_song_time_seconds = 0.0
+                        # song_start_time_ticks = 0 # Resetting this here might not be needed if start handles it
+                        reset_song_played_states(song_data)
+                        reset_learning_mode_specific_states()
+
+                    elif clicked_action_id == 'action_toggle_mode':
+                        if not mode_switch_confirm_active:
+                            target_mode_on_confirm = APP_MODES['PRESENTATION'] if current_mode == APP_MODES['LEARNING'] else APP_MODES['LEARNING']
+                            mode_switch_confirm_active = True
+
+                            if song_playback_status == 'PLAYING': # Pause song during confirmation
+                                song_playback_status = 'USER_PAUSED'
+                                time_paused_at_ticks = pygame.time.get_ticks()
+
+                # (Potentially other MOUSEBUTTONDOWN handling, e.g., for piano keys if ever implemented)
+
     # --- Mode-Specific Logic ---
-    if current_mode == APP_MODES['LEARNING']:
-        if learning_mode_state['paused_at_time'] is None: # Not currently paused
-            if song_start_time_ticks == 0: # Just started or resumed learning mode song playback
-                # If current_song_time_seconds is already advanced (e.g. from a previous run or skip), adjust start_ticks
-                song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
-                # Ensure song data is reset if we are truly starting from beginning of song playback
-                # This initial reset is now done before the loop for LEARNING mode too.
-                # if current_song_time_seconds == 0:
-                #      reset_song_played_states(song_data)
+    # Only advance time and process active notes if song is 'PLAYING'
+    if song_playback_status == 'PLAYING':
+        if current_mode == APP_MODES['LEARNING']:
+            if learning_mode_state['paused_at_time'] is None: # Not internally paused by learning mechanism
+            # song_start_time_ticks is set by 'action_start' or resume logic.
+            # No need for a 'song_start_time_ticks == 0' fallback here if actions are comprehensive.
+            # If it IS 0 here, it implies 'action_start' wasn't called, which means current_song_time_seconds won't advance correctly.
+            # This state should ideally be managed by button actions.
+            # However, if current_song_time_seconds is 0 and song_start_time_ticks is 0, this means first frame after STOP.
+            # Start button should set song_start_time_ticks = pygame.time.get_ticks().
+            if song_start_time_ticks == 0 and current_song_time_seconds > 0: # Resuming from a persisted time but ticks not set
+                 song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+            elif song_start_time_ticks == 0 and current_song_time_seconds == 0: # Should be handled by start button setting ticks
+                 pass # effectively paused until start is pressed
 
-            current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
+            if song_start_time_ticks != 0 : # Only advance if properly started
+                current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
 
-            # Check for notes to pause for
+            # Check for notes to pause for (only if time is actually advancing or has a valid start point)
             min_next_note_time = float('inf')
 
             for note_info_iter in song_data: # Use a different variable name to avoid conflict
@@ -733,19 +937,24 @@ while running:
                 # Update song_start_time_ticks to reflect this frozen time for drawing purposes
                 song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
 
-        # (Input handling for when paused in learning mode will be added in a subsequent step)
-        # (Potentially, auto-play logic for already correctly pressed notes if not paused, could also go here)
+        # (Input handling for when paused in learning mode is in the event loop)
+        # (Auto-play logic for correctly pressed notes if not paused isn't part of current scope)
 
-    elif current_mode == APP_MODES['PRESENTATION']:
-        if song_start_time_ticks == 0:
-            song_start_time_ticks = pygame.time.get_ticks()
-            # reset_song_played_states(song_data) # Already done before loop or on mode switch typically
-        current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
+        elif current_mode == APP_MODES['PRESENTATION']:
+            # Similar logic for song_start_time_ticks as in LEARNING mode if we allow PRESENTATION to resume.
+            # For now, PRESENTATION usually starts from 0 via action_start.
+            if song_start_time_ticks == 0 and current_song_time_seconds > 0: # Resuming from a persisted time
+                 song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+            elif song_start_time_ticks == 0 and current_song_time_seconds == 0:
+                 pass # Paused until start
 
-        # Process notes for automatic playing and key release (Presentation Mode) - existing logic
-        for note_info in song_data: # note_info is fine here as it's the main loop for this mode
-            key_type, key_idx = get_key_type_and_index_for_midi(
-                note_info['midi_note'],
+            if song_start_time_ticks != 0:
+                current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
+
+            # Process notes for automatic playing and key release (Presentation Mode)
+            for note_info_pres in song_data:
+                key_type_pres, key_idx_pres = get_key_type_and_index_for_midi(
+                    note_info_pres['midi_note'],
                 KEYBOARD_START_MIDI_NOTE,
                 NUM_WHITE_KEYS,
                 NUM_BLACK_KEYS
@@ -760,38 +969,30 @@ while running:
                     if 0 <= key_idx < NUM_WHITE_KEYS:
                         white_key_pressed_states[key_idx] = True
                 elif key_type == 'black':
-                    if 0 <= key_idx < NUM_BLACK_KEYS:
-                        black_key_pressed_states[key_idx] = True
+                    if 0 <= key_idx_pres < NUM_BLACK_KEYS:
+                        black_key_pressed_states[key_idx_pres] = True
 
-                # Play sound
-                if note_info['midi_note'] in midi_to_sound_map and midi_to_sound_map[note_info['midi_note']]:
-                    midi_to_sound_map[note_info['midi_note']].play()
+                if note_info_pres['midi_note'] in midi_to_sound_map and midi_to_sound_map[note_info_pres['midi_note']]:
+                    midi_to_sound_map[note_info_pres['midi_note']].play()
+                note_info_pres['played'] = True
 
-                note_info['played'] = True # Mark as played (triggered)
+            note_end_time_pres = note_info_pres['start_time'] + note_info_pres['duration']
+            if note_info_pres['played'] and note_end_time_pres <= current_song_time_seconds:
+                # Deactivate key
+                # This simple deactivation might clear a key pressed by the user if timing is exact.
+                # More robust would be to track what the presenter pressed.
+                if key_type_pres == 'white' and 0 <= key_idx_pres < NUM_WHITE_KEYS and white_key_pressed_states[key_idx_pres]:
+                     white_key_pressed_states[key_idx_pres] = False
+                elif key_type_pres == 'black' and 0 <= key_idx_pres < NUM_BLACK_KEYS and black_key_pressed_states[key_idx_pres]:
+                    black_key_pressed_states[key_idx_pres] = False
 
-            # Check for note deactivation (release)
-            note_end_time = note_info['start_time'] + note_info['duration']
-            if note_info['played'] and note_end_time <= current_song_time_seconds:
-                # Only release if the key is currently shown as pressed by this logic.
-                # This is a simple check; more robust state tracking might be needed for complex scenarios.
-                key_is_pressed_by_presenter = False
-                if key_type == 'white' and 0 <= key_idx < NUM_WHITE_KEYS and white_key_pressed_states[key_idx]:
-                     # Check if this key was the one most recently activated for this note_info if multiple notes map to it
-                    key_is_pressed_by_presenter = True # Simplified: assume it was this note
-                elif key_type == 'black' and 0 <= key_idx < NUM_BLACK_KEYS and black_key_pressed_states[key_idx]:
-                    key_is_pressed_by_presenter = True # Simplified
-
-                if key_is_pressed_by_presenter:
-                    if key_type == 'white':
-                        white_key_pressed_states[key_idx] = False
-                    elif key_type == 'black':
-                        black_key_pressed_states[key_idx] = False
-                    # Consider adding a 'released_by_presenter' flag to note_info if needed
-                    # to prevent this from running multiple times or interfering with user playing same note.
-                    # For now, 'played' being true covers this.
+    # If not 'PLAYING', current_song_time_seconds does not advance.
+    # Piano roll and other elements will reflect this static time.
 
     # Drawing
     screen.fill(BACKGROUND_COLOR)
+
+    draw_control_panel(screen, control_panel_buttons, current_mode, APP_MODES, pygame.mouse.get_pos())
 
     # Piano roll is drawn in both PRESENTATION and LEARNING modes
     if current_mode == APP_MODES['PRESENTATION'] or current_mode == APP_MODES['LEARNING']:
@@ -829,6 +1030,36 @@ while running:
         feedback_flash_info['key_midi'] = None
 
     # Update Display
+
+    # Draw mode switch confirmation dialog if active (overlays everything else)
+    if mode_switch_confirm_active:
+        # Create a semi-transparent overlay for the background
+        overlay_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay_surface.fill((0, 0, 0, 180)) # Dark semi-transparent
+        screen.blit(overlay_surface, (0,0))
+
+        # Define text and render
+        target_mode_name = "Presentation" if target_mode_on_confirm == APP_MODES['PRESENTATION'] else "Learning"
+        prompt_line1 = f"Switch to {target_mode_name} Mode?"
+        prompt_line2 = "Reset song (R) or Continue current position (C)?"
+        prompt_line3 = "Press Esc to Cancel."
+
+        prompt_font = control_panel_font # Reuse control panel font
+
+        text_y_start = WINDOW_HEIGHT // 2 - 50
+
+        line1_surf = prompt_font.render(prompt_line1, True, WHITE)
+        line1_rect = line1_surf.get_rect(center=(WINDOW_WIDTH // 2, text_y_start))
+        screen.blit(line1_surf, line1_rect)
+
+        line2_surf = prompt_font.render(prompt_line2, True, WHITE)
+        line2_rect = line2_surf.get_rect(center=(WINDOW_WIDTH // 2, text_y_start + 30))
+        screen.blit(line2_surf, line2_rect)
+
+        line3_surf = prompt_font.render(prompt_line3, True, WHITE)
+        line3_rect = line3_surf.get_rect(center=(WINDOW_WIDTH // 2, text_y_start + 60))
+        screen.blit(line3_surf, line3_rect)
+
     pygame.display.flip()
 
     # Control Frame Rate
