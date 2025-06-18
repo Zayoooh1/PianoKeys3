@@ -80,6 +80,45 @@ for key_code, key_data in key_map.items():
         print(f"Could not load sound for key {pygame.key.name(key_code)}: {key_data['sound_file']} - {e}")
         # Keep sound_obj as None if loading fails
 
+# --- Song Data ---
+# Structure: {'midi_note': int, 'start_time': float, 'duration': float, 'played': False}
+# MIDI notes for "Wlazł kotek na płotek" (approximate)
+# G4: 67, E4: 64, C4: 60, A4: 69
+
+song_data = [
+    # Wlazł ko-tek na płotek
+    # G E C G A G E C (notes)
+    # 1 2 3 4 5 6 7 8 (syllables for timing)
+    {'midi_note': 67, 'start_time': 0.0, 'duration': 0.4, 'played': False},  # Wlazł (G4)
+    {'midi_note': 64, 'start_time': 0.5, 'duration': 0.4, 'played': False},  # ko- (E4)
+    {'midi_note': 60, 'start_time': 1.0, 'duration': 0.4, 'played': False},  # -tek (C4)
+
+    {'midi_note': 67, 'start_time': 1.5, 'duration': 0.4, 'played': False},  # na (G4)
+    {'midi_note': 69, 'start_time': 2.0, 'duration': 0.4, 'played': False},  # pło- (A4)
+    {'midi_note': 67, 'start_time': 2.5, 'duration': 0.4, 'played': False},  # -tek (G4)
+
+    {'midi_note': 64, 'start_time': 3.0, 'duration': 0.4, 'played': False},  # i (E4)
+    {'midi_note': 60, 'start_time': 3.5, 'duration': 0.4, 'played': False},  # mru- (C4)
+    # For "mruga", the last note often goes up or resolves. Let's use G4 for simplicity.
+    {'midi_note': 67, 'start_time': 4.0, 'duration': 0.4, 'played': False},  # -ga (G4)
+]
+
+def debug_print_song(notes_list):
+    print("--- Song Debug Print ---")
+    if not notes_list:
+        print("No notes in the song.")
+        return
+    for i, note_info in enumerate(notes_list):
+        print(f"Note {i+1}: MIDI={note_info.get('midi_note', 'N/A')}, "
+              f"Start={note_info.get('start_time', 'N/A'):.2f}s, "
+              f"Duration={note_info.get('duration', 'N/A'):.2f}s, "
+              f"Played={note_info.get('played', 'N/A')}")
+    print("------------------------")
+
+# Example of how to call it (optional, can be commented out):
+# If you want to test it immediately when the script runs:
+# debug_print_song(song_data)
+
 # Note: white_key_pressed_states and black_key_pressed_states are now passed as arguments
 def draw_white_key(surface, rect, shadow_offset, is_pressed):
     """Draws a white piano key with a shadow, changing appearance if pressed."""
