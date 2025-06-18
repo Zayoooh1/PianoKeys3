@@ -61,6 +61,38 @@ black_key_pressed_states = [False] * NUM_BLACK_KEYS
 
 SOUNDS_DIR = "sounds"
 PLACEHOLDER_SOUND = os.path.join(SOUNDS_DIR, "placeholder.wav")
+CORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "correct.wav")
+INCORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "incorrect.wav")
+
+correct_sound = None
+incorrect_sound = None
+
+try:
+    correct_sound = pygame.mixer.Sound(CORRECT_SOUND_FILE)
+except pygame.error as e:
+    print(f"Could not load correct sound {CORRECT_SOUND_FILE}: {e}. Attempting to create dummy file.")
+    try:
+        # Create dummy file if it doesn't exist (will be silent or error on play if empty)
+        if not os.path.exists(CORRECT_SOUND_FILE):
+            with open(CORRECT_SOUND_FILE, 'w') as f: # 'w' creates or truncates
+                pass # Create empty file
+        # Try loading again if you expect the dummy to be valid after creation for some reason
+        # correct_sound = pygame.mixer.Sound(CORRECT_SOUND_FILE)
+    except Exception as fe:
+        print(f"Failed to create dummy file {CORRECT_SOUND_FILE}: {fe}")
+
+
+try:
+    incorrect_sound = pygame.mixer.Sound(INCORRECT_SOUND_FILE)
+except pygame.error as e:
+    print(f"Could not load incorrect sound {INCORRECT_SOUND_FILE}: {e}. Attempting to create dummy file.")
+    try:
+        if not os.path.exists(INCORRECT_SOUND_FILE):
+            with open(INCORRECT_SOUND_FILE, 'w') as f:
+                pass
+        # incorrect_sound = pygame.mixer.Sound(INCORRECT_SOUND_FILE)
+    except Exception as fe:
+        print(f"Failed to create dummy file {INCORRECT_SOUND_FILE}: {fe}")
 
 # Create sounds directory if it doesn't exist
 if not os.path.exists(SOUNDS_DIR):
@@ -144,6 +176,38 @@ for pc_key, data in key_map.items():
 
 # print("MIDI to Sound Map:", midi_to_sound_map) # For debugging
 
+# --- PC Key to MIDI Mapping ---
+pc_key_to_midi_map = {}
+
+for pc_key_code, data in key_map.items():
+    key_type = data['type']
+    # This is the 0-9 for white, 0-6 for black as per current key_map structure
+    key_index_in_type = data['index']
+
+    midi_note = -1
+
+    if key_type == 'white':
+        # key_index_in_type for white keys in key_map goes from 0 up to 9 for the current mapping
+        # It represents the Nth white key assigned a PC key.
+        # Octave relative to keyboard start: key_index_in_type // 7
+        # Index within that octave's white keys: key_index_in_type % 7
+        octave_num_for_key = (KEYBOARD_START_MIDI_NOTE // 12) + (key_index_in_type // 7)
+        offset_in_octave_for_key = WHITE_KEY_MIDI_OFFSETS[key_index_in_type % 7]
+        midi_note = octave_num_for_key * 12 + offset_in_octave_for_key
+
+    elif key_type == 'black':
+        # key_index_in_type for black keys in key_map goes from 0 up to 6
+        # Octave relative to keyboard start: key_index_in_type // 5 (since there are 5 black keys per octave)
+        # Index within that octave's black keys: key_index_in_type % 5
+        octave_num_for_key = (KEYBOARD_START_MIDI_NOTE // 12) + (key_index_in_type // 5)
+        offset_in_octave_for_key = BLACK_KEY_MIDI_OFFSETS[key_index_in_type % 5]
+        midi_note = octave_num_for_key * 12 + offset_in_octave_for_key
+
+    if midi_note != -1:
+        pc_key_to_midi_map[pc_key_code] = midi_note
+
+# For debugging:
+# print("PC Key to MIDI Map:", {pygame.key.name(k):v for k,v in pc_key_to_midi_map.items()})
 
 # --- Song Data ---
 # Structure: {'midi_note': int, 'start_time': float, 'duration': float, 'played': False}
@@ -184,9 +248,29 @@ def debug_print_song(notes_list):
 # If you want to test it immediately when the script runs:
 # debug_print_song(song_data)
 
-# --- Presentation Mode State and Timing ---
-presentation_mode_active = True  # Set to True for initial testing
+# --- Mode Management ---
+APP_MODES = {'LEARNING': 0, 'PRESENTATION': 1}
+current_mode = APP_MODES['LEARNING'] # Default to Learning Mode
+# presentation_mode_active = True  # Set to True for initial testing # Replaced by current_mode
+
+# --- Learning Mode State ---
+learning_mode_state = {
+    'paused_at_time': None,  # Song time (float) where playback is paused, or None if running
+    'notes_at_pause': [],    # List of note dicts that are currently expected to be played
+    'correctly_pressed_midi_in_pause': set() # Set of MIDI notes user correctly pressed for current pause
+}
+
+# --- Visual Feedback Flash State ---
+feedback_flash_info = {
+    'key_midi': None,       # MIDI note of the key to flash
+    'color': None,          # (R, G, B) color of the flash
+    'end_time_ms': 0        # pygame.time.get_ticks() value when the flash should end
+}
+
+# --- Presentation Mode State and Timing (now relies on current_mode) ---
+# current_song_time_seconds will be updated in the main loop if in PRESENTATION or LEARNING (when not paused)
 current_song_time_seconds = 0.0
+# song_start_time_ticks will be used by both modes to track song progression
 song_start_time_ticks = 0 # Stores pygame.time.get_ticks() when the song playback begins
 
 # Function to reset song played states (call before starting presentation mode)
@@ -194,8 +278,8 @@ def reset_song_played_states(notes_list):
     for note_info in notes_list:
         note_info['played'] = False
 
-# Initially reset the song data if presentation mode is active from the start
-if presentation_mode_active:
+# Initially reset the song data if starting in presentation mode (or can be done at mode switch)
+if current_mode == APP_MODES['PRESENTATION']: # Initial reset if starting in this mode
     reset_song_played_states(song_data) # song_data should be defined before this
 
 def get_x_for_midi_note(midi_note, first_midi_note_on_keyboard, num_total_white_keys, white_key_width_px):
@@ -396,6 +480,56 @@ def draw_piano_roll_notes(surface, current_time_sec, notes_list, px_per_sec,
                 pygame.draw.rect(surface, NOTE_RECT_COLOR, note_rect)
                 pygame.draw.rect(surface, NOTE_RECT_BORDER_COLOR, note_rect, 1)
 
+def draw_feedback_flash_overlay(surface, flash_info, first_midi_ref, num_white_keys_ref, num_black_keys_ref, white_key_w_ref, keyboard_y_start_ref, white_key_h_ref, black_key_w_ref, black_key_h_ref):
+    """
+    Draws a colored flash overlay on a specific key.
+    Relies on feedback_flash_info being up-to-date.
+    Needs keyboard geometry info to draw in the right place.
+    """
+    if flash_info['key_midi'] is None or flash_info['end_time_ms'] <= pygame.time.get_ticks():
+        flash_info['key_midi'] = None # Ensure flash is cleared if expired
+        return
+
+    key_type, key_idx = get_key_type_and_index_for_midi(
+        flash_info['key_midi'],
+        first_midi_ref,
+        num_white_keys_ref,
+        num_black_keys_ref
+    )
+
+    if key_type is None:
+        flash_info['key_midi'] = None # Clear if note not on keyboard
+        return
+
+    flash_rect = None
+
+    key_center_x = get_x_for_midi_note(flash_info['key_midi'], first_midi_ref, num_white_keys_ref, white_key_w_ref)
+
+    if key_center_x is None:
+        flash_info['key_midi'] = None # Clear if note not on keyboard
+        return
+
+    current_key_width = 0
+    current_key_height = 0
+
+    if key_type == 'white':
+        current_key_width = white_key_w_ref
+        current_key_height = white_key_h_ref
+        key_top_left_x = key_center_x - (current_key_width / 2)
+        flash_rect = pygame.Rect(key_top_left_x, keyboard_y_start_ref, current_key_width, current_key_height)
+    elif key_type == 'black':
+        current_key_width = black_key_w_ref
+        current_key_height = black_key_h_ref
+        key_top_left_x = key_center_x - (current_key_width / 2)
+        flash_rect = pygame.Rect(key_top_left_x, keyboard_y_start_ref, current_key_width, current_key_height)
+
+    if flash_rect:
+        flash_surface = pygame.Surface(flash_rect.size, pygame.SRCALPHA)
+        flash_surface.fill((*flash_info['color'], 128)) # RGB + Alpha (128 is semi-transparent)
+        surface.blit(flash_surface, flash_rect.topleft)
+    else: # Should not happen if key_type is valid
+        flash_info['key_midi'] = None
+
 # Note: white_key_pressed_states and black_key_pressed_states are now passed as arguments
 def draw_white_key(surface, rect, shadow_offset, is_pressed):
     """Draws a white piano key with a shadow, changing appearance if pressed."""
@@ -457,10 +591,12 @@ def draw_piano(surface, white_pressed_states, black_pressed_states):
 # Initialize Clock
 clock = pygame.time.Clock()
 
-# Reset song start time if presentation mode is active
-if presentation_mode_active:
-    song_start_time_ticks = 0 # Will be set on first frame of presentation
-    # reset_song_played_states(song_data) # This is already done when presentation_mode_active is set earlier
+# Reset song start time and states if starting in a mode that uses song timing
+if current_mode == APP_MODES['PRESENTATION'] or current_mode == APP_MODES['LEARNING']:
+    song_start_time_ticks = 0 # Will be set on first frame of mode execution
+    current_song_time_seconds = 0.0 # Ensure song time starts at 0 for these modes
+    reset_song_played_states(song_data) # Reset for both modes initially
+
 
 # Game Loop
 running = True
@@ -470,10 +606,69 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-        if event.type == pygame.KEYDOWN and not presentation_mode_active: # Only process key presses if not in presentation mode
-            if event.key in key_map:
-                mapped_key = key_map[event.key]
-                key_type = mapped_key['type']
+        # User input: key presses for playing notes
+        if event.type == pygame.KEYDOWN:
+            if current_mode == APP_MODES['LEARNING']:
+                if learning_mode_state['paused_at_time'] is not None: # Paused, waiting for user input
+                    pressed_midi = pc_key_to_midi_map.get(event.key)
+                    expected_midi_notes_set = {n['midi_note'] for n in learning_mode_state['notes_at_pause']}
+
+                    if event.key == pygame.K_SPACE: # Skip functionality
+                        for note_info_to_skip in learning_mode_state['notes_at_pause']:
+                            for song_note in song_data:
+                                if song_note['midi_note'] == note_info_to_skip['midi_note'] and \
+                                   song_note['start_time'] == note_info_to_skip['start_time']:
+                                    song_note['played'] = True # Mark as played/skipped
+                                    break
+
+                        learning_mode_state['paused_at_time'] = None
+                        learning_mode_state['notes_at_pause'].clear()
+                        learning_mode_state['correctly_pressed_midi_in_pause'].clear()
+                        song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+
+                    elif pressed_midi is not None: # A mapped piano key was pressed
+                        if pressed_midi in expected_midi_notes_set and \
+                           pressed_midi not in learning_mode_state['correctly_pressed_midi_in_pause']:
+
+                            learning_mode_state['correctly_pressed_midi_in_pause'].add(pressed_midi)
+                            feedback_flash_info = {'key_midi': pressed_midi, 'color': (0, 255, 0), 'end_time_ms': pygame.time.get_ticks() + 300}
+                            if correct_sound:
+                                correct_sound.play()
+
+                            key_type_flash, key_idx_flash = get_key_type_and_index_for_midi(pressed_midi, KEYBOARD_START_MIDI_NOTE, NUM_WHITE_KEYS, NUM_BLACK_KEYS)
+                            if key_type_flash == 'white': white_key_pressed_states[key_idx_flash] = True
+                            elif key_type_flash == 'black': black_key_pressed_states[key_idx_flash] = True
+
+                            if learning_mode_state['correctly_pressed_midi_in_pause'] == expected_midi_notes_set:
+                                for note_info_completed in learning_mode_state['notes_at_pause']:
+                                    for song_note in song_data:
+                                        if song_note['midi_note'] == note_info_completed['midi_note'] and \
+                                           song_note['start_time'] == note_info_completed['start_time']:
+                                            song_note['played'] = True
+                                            break
+
+                                for midi_val_release in learning_mode_state['correctly_pressed_midi_in_pause']:
+                                    k_type_release, k_idx_release = get_key_type_and_index_for_midi(midi_val_release, KEYBOARD_START_MIDI_NOTE, NUM_WHITE_KEYS, NUM_BLACK_KEYS)
+                                    if k_type_release == 'white': white_key_pressed_states[k_idx_release] = False
+                                    elif k_type_release == 'black': black_key_pressed_states[k_idx_release] = False
+
+                                learning_mode_state['paused_at_time'] = None
+                                learning_mode_state['notes_at_pause'].clear()
+                                learning_mode_state['correctly_pressed_midi_in_pause'].clear()
+                                song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+
+                        elif pressed_midi not in expected_midi_notes_set:
+                            feedback_flash_info = {'key_midi': pressed_midi, 'color': (255, 0, 0), 'end_time_ms': pygame.time.get_ticks() + 300}
+                            if incorrect_sound:
+                                incorrect_sound.play()
+                        # Else: key was already correctly pressed for this pause, do nothing or maybe different feedback
+
+                # Else (if not K_SPACE and pressed_midi is None): unmapped PC key pressed, do nothing during pause.
+
+            elif learning_mode_state['paused_at_time'] is None: # Learning mode, but not paused (free play)
+                if event.key in key_map: # Standard key press logic
+                    mapped_key = key_map[event.key]
+                    key_type = mapped_key['type']
                 key_index = mapped_key['index']
 
                 if key_type == 'white':
@@ -500,17 +695,55 @@ while running:
                     if 0 <= key_index < len(black_key_pressed_states):
                         black_key_pressed_states[key_index] = False
 
-    if presentation_mode_active:
-        if song_start_time_ticks == 0: # First frame in presentation mode
+    # --- Mode-Specific Logic ---
+    if current_mode == APP_MODES['LEARNING']:
+        if learning_mode_state['paused_at_time'] is None: # Not currently paused
+            if song_start_time_ticks == 0: # Just started or resumed learning mode song playback
+                # If current_song_time_seconds is already advanced (e.g. from a previous run or skip), adjust start_ticks
+                song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+                # Ensure song data is reset if we are truly starting from beginning of song playback
+                # This initial reset is now done before the loop for LEARNING mode too.
+                # if current_song_time_seconds == 0:
+                #      reset_song_played_states(song_data)
+
+            current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
+
+            # Check for notes to pause for
+            min_next_note_time = float('inf')
+
+            for note_info_iter in song_data: # Use a different variable name to avoid conflict
+                if not note_info_iter['played'] and note_info_iter['start_time'] < min_next_note_time:
+                    min_next_note_time = note_info_iter['start_time']
+
+            # Check if it's time to pause for the next note(s)
+            # The check should be against the *actual* next note time, not just any time in the future.
+            # If there are no more notes, min_next_note_time remains float('inf')
+            if min_next_note_time != float('inf') and min_next_note_time <= current_song_time_seconds:
+                learning_mode_state['paused_at_time'] = min_next_note_time
+                learning_mode_state['notes_at_pause'].clear() # Clear previous notes
+                for note_info_iter in song_data: # Use a different variable name
+                    if not note_info_iter['played'] and note_info_iter['start_time'] == min_next_note_time:
+                        # Add a copy, though 'played' is the main mutable part of original song_data items
+                        learning_mode_state['notes_at_pause'].append(dict(note_info_iter))
+
+                learning_mode_state['correctly_pressed_midi_in_pause'].clear()
+
+                # Adjust current_song_time_seconds to exactly match the pause time
+                current_song_time_seconds = min_next_note_time
+                # Update song_start_time_ticks to reflect this frozen time for drawing purposes
+                song_start_time_ticks = pygame.time.get_ticks() - int(current_song_time_seconds * 1000)
+
+        # (Input handling for when paused in learning mode will be added in a subsequent step)
+        # (Potentially, auto-play logic for already correctly pressed notes if not paused, could also go here)
+
+    elif current_mode == APP_MODES['PRESENTATION']:
+        if song_start_time_ticks == 0:
             song_start_time_ticks = pygame.time.get_ticks()
-            # Ensure song states are fresh if mode was toggled at runtime later
-            reset_song_played_states(song_data)
-
-
+            # reset_song_played_states(song_data) # Already done before loop or on mode switch typically
         current_song_time_seconds = (pygame.time.get_ticks() - song_start_time_ticks) / 1000.0
 
-        # Process notes for automatic playing and key release
-        for note_info in song_data:
+        # Process notes for automatic playing and key release (Presentation Mode) - existing logic
+        for note_info in song_data: # note_info is fine here as it's the main loop for this mode
             key_type, key_idx = get_key_type_and_index_for_midi(
                 note_info['midi_note'],
                 KEYBOARD_START_MIDI_NOTE,
@@ -560,10 +793,13 @@ while running:
     # Drawing
     screen.fill(BACKGROUND_COLOR)
 
-    if presentation_mode_active:
+    # Piano roll is drawn in both PRESENTATION and LEARNING modes
+    if current_mode == APP_MODES['PRESENTATION'] or current_mode == APP_MODES['LEARNING']:
+        # In LEARNING mode, current_song_time_seconds might be paused_at_time
+        time_for_roll = learning_mode_state['paused_at_time'] if current_mode == APP_MODES['LEARNING'] and learning_mode_state['paused_at_time'] is not None else current_song_time_seconds
         draw_piano_roll_notes(
             screen,
-            current_song_time_seconds,
+            time_for_roll,
             song_data,
             pixels_per_second,
             PIANO_ROLL_LOOKAHEAD_SECONDS,
@@ -574,6 +810,23 @@ while running:
         )
 
     draw_piano(screen, white_key_pressed_states, black_key_pressed_states)
+
+    # Draw feedback flash overlay if active
+    if feedback_flash_info['key_midi'] is not None and feedback_flash_info['end_time_ms'] > pygame.time.get_ticks():
+        draw_feedback_flash_overlay(
+            screen,
+            feedback_flash_info,
+            KEYBOARD_START_MIDI_NOTE, # first_midi_ref
+            NUM_WHITE_KEYS,           # num_white_keys_ref
+            NUM_BLACK_KEYS,           # num_black_keys_ref
+            white_key_width,          # white_key_w_ref
+            WINDOW_HEIGHT - keyboard_height, # keyboard_y_start_ref
+            white_key_height,         # white_key_h_ref
+            black_key_width,          # black_key_w_ref
+            black_key_height          # black_key_h_ref
+        )
+    else: # Ensure flash is cleared if time expired before drawing call
+        feedback_flash_info['key_midi'] = None
 
     # Update Display
     pygame.display.flip()
