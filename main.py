@@ -27,6 +27,9 @@ LIGHTER_GRAY = (100, 100, 100) # For pressed black keys
 # --- New Theme Colors ---
 DARK_BACKGROUND_COLOR = (20, 20, 30)
 ACCENT_COLOR_CYAN = (0, 200, 200)
+ACCENT_COLOR_CYAN_BRIGHT = (min(255, ACCENT_COLOR_CYAN[0] + 40),
+                              min(255, ACCENT_COLOR_CYAN[1] + 40),
+                              min(255, ACCENT_COLOR_CYAN[2] + 40))
 STAR_COLORS = [
     (220, 220, 255),
     (200, 200, 240),
@@ -46,6 +49,9 @@ black_key_width = int(white_key_width * 0.6)
 black_key_height = int(white_key_height * 0.6)
 SHADOW_OFFSET = 3
 
+KEYBOARD_RENDER_AREA_RECT = pygame.Rect(0, WINDOW_HEIGHT - keyboard_height, WINDOW_WIDTH, keyboard_height)
+
+
 # --- Control Panel Constants ---
 CONTROL_PANEL_HEIGHT = 150
 CONTROL_PANEL_Y_START = WINDOW_HEIGHT - CONTROL_PANEL_HEIGHT
@@ -56,7 +62,7 @@ BUTTON_HOVER_COLOR = ACCENT_COLOR_CYAN
 BUTTON_WIDTH = 100
 BUTTON_HEIGHT = 40
 BUTTON_MARGIN = 10
-padding = 10 # General padding for control panel layout
+padding = 10
 
 SLIDER_TRACK_HEIGHT = 10
 SLIDER_KNOB_WIDTH = 15
@@ -112,24 +118,22 @@ progress_bar_props = {
     'track_color': PROGRESS_BAR_TRACK_COLOR
 }
 
-# --- Star Animation System ---
 NUM_STARS = 100
 stars = []
 max_y_for_stars = WINDOW_HEIGHT - CONTROL_PANEL_HEIGHT
 if max_y_for_stars <=0: max_y_for_stars = WINDOW_HEIGHT
-
 for _ in range(NUM_STARS):
-    stars.append({
-        'x': random.randint(0, WINDOW_WIDTH),
-        'y': random.randint(0, max_y_for_stars),
-        'radius': random.uniform(0.5, 1.5),
-        'base_color_tuple': random.choice(STAR_COLORS),
-        'current_alpha': 0.0,
-        'alpha_cycle_duration': random.uniform(2000, 5000),
-        'alpha_cycle_time': random.uniform(0, 5000)
-    })
+    stars.append({'x': random.randint(0, WINDOW_WIDTH), 'y': random.randint(0, max_y_for_stars),
+                  'radius': random.uniform(0.5, 1.5),'base_color_tuple': random.choice(STAR_COLORS),
+                  'current_alpha': 0.0, 'alpha_cycle_duration': random.uniform(2000, 5000),
+                  'alpha_cycle_time': random.uniform(0, 5000)})
 
-# --- Piano Roll Constants ---
+active_shockwaves = []
+# Each shockwave: {'center_x', 'center_y', 'start_time_ms', 'max_radius', 'duration_ms', 'color'}
+
+last_drawn_white_key_rects = []
+last_drawn_black_key_rects = []
+
 PIANO_ROLL_LOOKAHEAD_SECONDS = 5.0
 PIANO_ROLL_SECONDS_ON_SCREEN = 5.0
 PIANO_ROLL_TOP_Y = 50
@@ -138,57 +142,29 @@ NOTE_RECT_COLOR = ACCENT_COLOR_CYAN
 NOTE_RECT_BORDER_COLOR = (100, 220, 220)
 NOTE_RECT_WIDTH_WHITE_RATIO = 0.8
 NOTE_RECT_WIDTH_BLACK_RATIO = 0.9
-
 if PIANO_ROLL_BOTTOM_Y > PIANO_ROLL_TOP_Y and PIANO_ROLL_SECONDS_ON_SCREEN > 0:
     pixels_per_second = (PIANO_ROLL_BOTTOM_Y - PIANO_ROLL_TOP_Y) / PIANO_ROLL_SECONDS_ON_SCREEN
 else:
-    pixels_per_second = 0
-    print("Warning: Piano roll Y coordinates or seconds_on_screen are configured incorrectly.")
-
+    pixels_per_second = 0; print("Warning: Piano roll Y coordinates or seconds_on_screen are configured incorrectly.")
 NUM_BLACK_KEYS = 5 * OCTAVES
 white_key_pressed_states = [False] * NUM_WHITE_KEYS
 black_key_pressed_states = [False] * NUM_BLACK_KEYS
-SOUNDS_DIR = "sounds"
-PLACEHOLDER_SOUND = os.path.join(SOUNDS_DIR, "placeholder.wav")
-CORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "correct.wav")
-INCORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "incorrect.wav")
-correct_sound = None
-incorrect_sound = None
+SOUNDS_DIR = "sounds"; PLACEHOLDER_SOUND = os.path.join(SOUNDS_DIR, "placeholder.wav")
+CORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "correct.wav"); INCORRECT_SOUND_FILE = os.path.join(SOUNDS_DIR, "incorrect.wav")
+correct_sound = None; incorrect_sound = None
 try: correct_sound = pygame.mixer.Sound(CORRECT_SOUND_FILE)
 except pygame.error as e: print(f"Could not load correct sound {CORRECT_SOUND_FILE}: {e}.")
 try: incorrect_sound = pygame.mixer.Sound(INCORRECT_SOUND_FILE)
 except pygame.error as e: print(f"Could not load incorrect sound {INCORRECT_SOUND_FILE}: {e}.")
 if not os.path.exists(SOUNDS_DIR): os.makedirs(SOUNDS_DIR)
-if not os.path.exists(CORRECT_SOUND_FILE): open(CORRECT_SOUND_FILE, 'w').close() # Ensure dummy files exist
+if not os.path.exists(CORRECT_SOUND_FILE): open(CORRECT_SOUND_FILE, 'w').close()
 if not os.path.exists(INCORRECT_SOUND_FILE): open(INCORRECT_SOUND_FILE, 'w').close()
-
-key_map = {
-    pygame.K_a: {'type': 'white', 'index': 0, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_s: {'type': 'white', 'index': 1, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_d: {'type': 'white', 'index': 2, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_f: {'type': 'white', 'index': 3, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_g: {'type': 'white', 'index': 4, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_h: {'type': 'white', 'index': 5, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_j: {'type': 'white', 'index': 6, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_k: {'type': 'white', 'index': 7, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_l: {'type': 'white', 'index': 8, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_SEMICOLON: {'type': 'white', 'index': 9, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_w: {'type': 'black', 'index': 0, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_e: {'type': 'black', 'index': 1, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_t: {'type': 'black', 'index': 2, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_y: {'type': 'black', 'index': 3, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_u: {'type': 'black', 'index': 4, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_o: {'type': 'black', 'index': 5, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-    pygame.K_p: {'type': 'black', 'index': 6, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None},
-}
+key_map = { pygame.K_a: {'type': 'white', 'index': 0, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_s: {'type': 'white', 'index': 1, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_d: {'type': 'white', 'index': 2, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_f: {'type': 'white', 'index': 3, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_g: {'type': 'white', 'index': 4, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_h: {'type': 'white', 'index': 5, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_j: {'type': 'white', 'index': 6, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_k: {'type': 'white', 'index': 7, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_l: {'type': 'white', 'index': 8, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_SEMICOLON: {'type': 'white', 'index': 9, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_w: {'type': 'black', 'index': 0, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_e: {'type': 'black', 'index': 1, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_t: {'type': 'black', 'index': 2, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_y: {'type': 'black', 'index': 3, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_u: {'type': 'black', 'index': 4, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_o: {'type': 'black', 'index': 5, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}, pygame.K_p: {'type': 'black', 'index': 6, 'sound_file': PLACEHOLDER_SOUND, 'sound_obj': None}}
 for key_code, data in key_map.items():
     try: data['sound_obj'] = pygame.mixer.Sound(data['sound_file'])
     except pygame.error as e: print(f"Could not load sound for key {pygame.key.name(key_code)}: {data['sound_file']} - {e}")
-
-midi_to_sound_map = {}
-KEYBOARD_START_MIDI_NOTE = 60
-WHITE_KEY_MIDI_OFFSETS = [0, 2, 4, 5, 7, 9, 11]
-BLACK_KEY_MIDI_OFFSETS = [1, 3, 6, 8, 10]
+midi_to_sound_map = {}; KEYBOARD_START_MIDI_NOTE = 60
+WHITE_KEY_MIDI_OFFSETS = [0, 2, 4, 5, 7, 9, 11]; BLACK_KEY_MIDI_OFFSETS = [1, 3, 6, 8, 10]
 for pc_key, data in key_map.items():
     key_type = data['type']; key_index_on_keyboard = data['index']; sound_obj = data['sound_obj']
     if sound_obj:
@@ -203,6 +179,12 @@ for pc_key_code, data in key_map.items():
     elif key_type == 'black': octave_num_for_key = (KEYBOARD_START_MIDI_NOTE // 12) + (key_index_in_type // 5); offset_in_octave_for_key = BLACK_KEY_MIDI_OFFSETS[key_index_in_type % 5]; midi_note = octave_num_for_key * 12 + offset_in_octave_for_key
     if midi_note != -1: pc_key_to_midi_map[pc_key_code] = midi_note
 song_data = [{'midi_note': 67, 'start_time': 0.0, 'duration': 0.4, 'played': False}, {'midi_note': 64, 'start_time': 0.5, 'duration': 0.4, 'played': False}, {'midi_note': 60, 'start_time': 1.0, 'duration': 0.4, 'played': False},{'midi_note': 67, 'start_time': 1.5, 'duration': 0.4, 'played': False},{'midi_note': 69, 'start_time': 2.0, 'duration': 0.4, 'played': False},{'midi_note': 67, 'start_time': 2.5, 'duration': 0.4, 'played': False},{'midi_note': 64, 'start_time': 3.0, 'duration': 0.4, 'played': False},{'midi_note': 60, 'start_time': 3.5, 'duration': 0.4, 'played': False},{'midi_note': 67, 'start_time': 4.0, 'duration': 0.4, 'played': False}]
+total_song_duration_seconds = 0.0
+def get_total_song_duration(notes_list):
+    if not notes_list: return 0.0
+    max_end_time = 0.0
+    for note in notes_list: note_end_time = note.get('start_time', 0) + note.get('duration', 0); max_end_time = max(max_end_time, note_end_time)
+    return max_end_time
 total_song_duration_seconds = get_total_song_duration(song_data)
 APP_MODES = {'LEARNING': 0, 'PRESENTATION': 1}; current_mode = APP_MODES['LEARNING']
 learning_mode_state = {'paused_at_time': None, 'notes_at_pause': [], 'correctly_pressed_midi_in_pause': set()}
@@ -247,6 +229,11 @@ def get_key_type_and_index_for_midi(midi_note, first_midi_note_on_keyboard, num_
         if not (0 <= key_index < num_total_black_keys): return None, None
     else: return None, None
     return key_type, key_index
+def get_rect_for_midi_note(midi_note):
+    key_type, key_idx = get_key_type_and_index_for_midi(midi_note, KEYBOARD_START_MIDI_NOTE, NUM_WHITE_KEYS, NUM_BLACK_KEYS)
+    if key_type == 'white' and 0 <= key_idx < len(last_drawn_white_key_rects): return last_drawn_white_key_rects[key_idx]
+    elif key_type == 'black' and 0 <= key_idx < len(last_drawn_black_key_rects): return last_drawn_black_key_rects[key_idx]
+    return None
 def update_stars(star_list_ref, dt_ms):
     for star in star_list_ref:
         star['alpha_cycle_time'] = (star['alpha_cycle_time'] + dt_ms) % star['alpha_cycle_duration']
@@ -260,6 +247,25 @@ def draw_stars(surface, star_list_ref):
         final_color = (max(0, min(255, final_r)), max(0, min(255, final_g)), max(0, min(255, final_b)))
         if star['radius'] >= 1: pygame.draw.circle(surface, final_color, (star['x'], star['y']), int(star['radius']))
         elif alpha_factor > 0.5 : surface.set_at((star['x'], star['y']), final_color)
+def manage_shockwaves(surface, shockwave_list_ref, current_ticks_ref, clip_area_rect):
+    num_rings = 3; ring_base_thickness = 4
+    for i in range(len(shockwave_list_ref) - 1, -1, -1):
+        sw = shockwave_list_ref[i]; elapsed_ms = current_ticks_ref - sw['start_time_ms']
+        if elapsed_ms > sw['duration_ms']: shockwave_list_ref.pop(i); continue
+        progress_ratio = elapsed_ms / sw['duration_ms']
+        current_max_ring_radius = sw['max_radius'] * progress_ratio
+        alpha_value = int(max(0, min(255, 255 * (1.0 - progress_ratio**2))))
+        original_clip = surface.get_clip(); surface.set_clip(clip_area_rect)
+        for ring_idx in range(num_rings):
+            ring_radius = current_max_ring_radius * (1 - (ring_idx / num_rings) * 0.7)
+            if ring_radius < 1: continue
+            thickness = max(1, int(ring_base_thickness * (1.0 - progress_ratio)))
+            r, g, b = sw['color']; alpha_factor = alpha_value / 255.0
+            current_ring_color_tuple = (int(r * alpha_factor), int(g * alpha_factor), int(b * alpha_factor)) # Renamed
+            current_ring_color_clamped = (max(0,min(255,c)) for c in current_ring_color_tuple) # Use generator
+            try: pygame.draw.circle(surface, tuple(current_ring_color_clamped), (sw['center_x'], sw['center_y']), int(ring_radius), thickness)
+            except pygame.error: pass # print(f"Error drawing shockwave circle: {e}")
+        surface.set_clip(original_clip)
 def draw_piano_roll_notes(surface, current_time_sec, notes_list, px_per_sec, lookahead_sec, first_midi_ref, total_white_keys_ref, white_key_w_ref, black_key_w_ref):
     if px_per_sec <= 0: return
     for note in notes_list:
@@ -278,21 +284,25 @@ def draw_piano_roll_notes(surface, current_time_sec, notes_list, px_per_sec, loo
             if visible_height > 0:
                 note_rect = pygame.Rect(rect_left_x, visible_top_y, rect_width, visible_height)
                 pygame.draw.rect(surface, NOTE_RECT_COLOR, note_rect); pygame.draw.rect(surface, NOTE_RECT_BORDER_COLOR, note_rect, 1)
-def draw_control_panel(surface, buttons_list_ref, sliders_list_ref, progress_bar_props_ref, current_app_mode_val, app_modes_ref, mouse_pos_tuple, current_song_time_ref, total_song_duration_ref, base_bpm_ref):
+def draw_control_panel(surface, buttons_list_ref, sliders_list_ref, progress_bar_props_ref, current_app_mode_val, app_modes_ref, mouse_pos_tuple, current_song_time_ref, total_song_duration_ref, base_bpm_ref, is_dragging_tempo, is_dragging_volume):
     panel_rect_bg = pygame.Rect(0, CONTROL_PANEL_Y_START, WINDOW_WIDTH, CONTROL_PANEL_HEIGHT); pygame.draw.rect(surface, CONTROL_PANEL_BG_COLOR, panel_rect_bg)
-    padding_cp = 10; slider_label_width_cp = 150; slider_y_pos_abs_cp = CONTROL_PANEL_Y_START + padding_cp; slider_track_width_actual_cp = SLIDER_WIDTH # Added _cp suffix
+    padding_cp = 10; slider_label_width_cp = 150; slider_y_pos_abs_cp = CONTROL_PANEL_Y_START + padding_cp; slider_track_width_actual_cp = SLIDER_WIDTH
     tempo_slider = sliders_list_ref[0]; tempo_label_x_start_cp = padding_cp ; tempo_slider_track_x_start_cp = tempo_label_x_start_cp + slider_label_width_cp + padding_cp
     tempo_slider['rect'] = pygame.Rect(tempo_slider_track_x_start_cp, slider_y_pos_abs_cp + (SLIDER_KNOB_HEIGHT - SLIDER_TRACK_HEIGHT)//2, slider_track_width_actual_cp, SLIDER_TRACK_HEIGHT)
     tempo_text = tempo_slider['text_label_func'](); tempo_label_surf = control_panel_font.render(tempo_text, True, BUTTON_TEXT_COLOR); tempo_label_rect = tempo_label_surf.get_rect(left=tempo_label_x_start_cp, centery=tempo_slider['rect'].centery); surface.blit(tempo_label_surf, tempo_label_rect)
     pygame.draw.rect(surface, SLIDER_TRACK_COLOR, tempo_slider['rect'], border_radius=5); tempo_val = tempo_slider['current_value_func'](); tempo_min, tempo_max = tempo_slider['value_range']
     knob_x_ratio_tempo = (tempo_val - tempo_min) / (tempo_max - tempo_min) if (tempo_max - tempo_min) != 0 else 0; knob_x_tempo = tempo_slider['rect'].left + int(knob_x_ratio_tempo * tempo_slider['rect'].width)
-    tempo_slider['knob_rect'] = pygame.Rect(knob_x_tempo - SLIDER_KNOB_WIDTH // 2, slider_y_pos_abs_cp, SLIDER_KNOB_WIDTH, SLIDER_KNOB_HEIGHT); pygame.draw.rect(surface, SLIDER_KNOB_COLOR, tempo_slider['knob_rect'], border_radius=3)
+    tempo_slider['knob_rect'] = pygame.Rect(knob_x_tempo - SLIDER_KNOB_WIDTH // 2, slider_y_pos_abs_cp, SLIDER_KNOB_WIDTH, SLIDER_KNOB_HEIGHT)
+    tempo_knob_color_to_use = ACCENT_COLOR_CYAN_BRIGHT if is_dragging_tempo else SLIDER_KNOB_COLOR
+    pygame.draw.rect(surface, tempo_knob_color_to_use, tempo_slider['knob_rect'], border_radius=3)
     volume_slider = sliders_list_ref[1]; volume_label_x_start_cp = tempo_slider_track_x_start_cp + slider_track_width_actual_cp + padding_cp * 2; volume_slider_track_x_start_cp = volume_label_x_start_cp + slider_label_width_cp + padding_cp
     volume_slider['rect'] = pygame.Rect(volume_slider_track_x_start_cp, slider_y_pos_abs_cp + (SLIDER_KNOB_HEIGHT - SLIDER_TRACK_HEIGHT)//2, slider_track_width_actual_cp, SLIDER_TRACK_HEIGHT)
     volume_text = volume_slider['text_label_func'](); volume_label_surf = control_panel_font.render(volume_text, True, BUTTON_TEXT_COLOR); volume_label_rect = volume_label_surf.get_rect(left=volume_label_x_start_cp, centery=volume_slider['rect'].centery); surface.blit(volume_label_surf, volume_label_rect)
     pygame.draw.rect(surface, SLIDER_TRACK_COLOR, volume_slider['rect'], border_radius=5); volume_val = volume_slider['current_value_func'](); volume_min, volume_max = volume_slider['value_range']
     knob_x_ratio_volume = (volume_val - volume_min) / (volume_max - volume_min) if (volume_max - volume_min) != 0 else 0; knob_x_volume = volume_slider['rect'].left + int(knob_x_ratio_volume * volume_slider['rect'].width)
-    volume_slider['knob_rect'] = pygame.Rect(knob_x_volume - SLIDER_KNOB_WIDTH // 2, slider_y_pos_abs_cp, SLIDER_KNOB_WIDTH, SLIDER_KNOB_HEIGHT); pygame.draw.rect(surface, SLIDER_KNOB_COLOR, volume_slider['knob_rect'], border_radius=3)
+    volume_slider['knob_rect'] = pygame.Rect(knob_x_volume - SLIDER_KNOB_WIDTH // 2, slider_y_pos_abs_cp, SLIDER_KNOB_WIDTH, SLIDER_KNOB_HEIGHT)
+    volume_knob_color_to_use = ACCENT_COLOR_CYAN_BRIGHT if is_dragging_volume else SLIDER_KNOB_COLOR
+    pygame.draw.rect(surface, volume_knob_color_to_use, volume_slider['knob_rect'], border_radius=3)
     progress_bar_y_pos_abs_cp = slider_y_pos_abs_cp + SLIDER_KNOB_HEIGHT + padding_cp; progress_bar_width_actual_cp = WINDOW_WIDTH - 2 * padding_cp
     progress_bar_props_ref['rect'] = pygame.Rect(padding_cp, progress_bar_y_pos_abs_cp, progress_bar_width_actual_cp, PROGRESS_BAR_HEIGHT); pygame.draw.rect(surface, progress_bar_props_ref['track_color'], progress_bar_props_ref['rect'], border_radius=3)
     if total_song_duration_ref > 0:
@@ -301,8 +311,15 @@ def draw_control_panel(surface, buttons_list_ref, sliders_list_ref, progress_bar
     button_y_start_abs_cp = progress_bar_y_pos_abs_cp + PROGRESS_BAR_HEIGHT + padding_cp; num_buttons_val_cp = len(buttons_list_ref); total_buttons_width_val_cp = num_buttons_val_cp * BUTTON_WIDTH + (num_buttons_val_cp - 1) * BUTTON_MARGIN; start_x_buttons_val_cp = (WINDOW_WIDTH - total_buttons_width_val_cp) // 2
     for i, button_info in enumerate(buttons_list_ref):
         button_x = start_x_buttons_val_cp + i * (BUTTON_WIDTH + BUTTON_MARGIN); button_info['rect'].topleft = (button_x, button_y_start_abs_cp); btn_rect_updated = button_info['rect']
-        current_color = button_info['base_color'];
-        if btn_rect_updated.collidepoint(mouse_pos_tuple): current_color = button_info['hover_color']
+        current_color = button_info['base_color']
+        is_hovered = btn_rect_updated.collidepoint(mouse_pos_tuple)
+        if button_info['action_id'] == 'action_toggle_mode':
+            current_color = ACCENT_COLOR_CYAN
+            if is_hovered:
+                r, g, b = ACCENT_COLOR_CYAN; hover_brightness_increase = 30
+                current_color = (min(255, r + hover_brightness_increase), min(255, g + hover_brightness_increase), min(255, b + hover_brightness_increase))
+        elif is_hovered:
+            current_color = button_info['hover_color']
         pygame.draw.rect(surface, current_color, btn_rect_updated); pygame.draw.rect(surface, (50,50,50), btn_rect_updated, 1)
         button_text_content = button_info['text']
         if button_info['action_id'] == 'action_toggle_mode': mode_name = "Learning" if current_app_mode_val == app_modes_ref['LEARNING'] else "Presentation"; button_text_content = f"Mode: {mode_name}"
@@ -327,16 +344,23 @@ def draw_black_key(surface, rect, shadow_offset, is_pressed):
     if is_pressed: pygame.draw.rect(surface, current_fill_color, rect)
     else: shadow_rect = rect.move(shadow_offset, shadow_offset); pygame.draw.rect(surface, (150,150,150), shadow_rect) ; pygame.draw.rect(surface, current_fill_color, rect)
 def draw_piano(surface, white_pressed_states, black_pressed_states):
+    global last_drawn_white_key_rects, last_drawn_black_key_rects
+    last_drawn_white_key_rects.clear(); last_drawn_black_key_rects.clear()
     keyboard_y_start = WINDOW_HEIGHT - white_key_height
-    for i in range(NUM_WHITE_KEYS): white_key_x = i * white_key_width; white_key_rect = pygame.Rect(white_key_x, keyboard_y_start, white_key_width, white_key_height); draw_white_key(surface, white_key_rect, SHADOW_OFFSET, white_key_pressed_states[i])
+    for i in range(NUM_WHITE_KEYS):
+        white_key_x = i * white_key_width; white_key_rect = pygame.Rect(white_key_x, keyboard_y_start, white_key_width, white_key_height)
+        last_drawn_white_key_rects.append(white_key_rect)
+        draw_white_key(surface, white_key_rect, SHADOW_OFFSET, white_key_pressed_states[i])
     black_key_pattern = [True, True, False, True, True, True, False]; black_key_idx_counter = 0
     for i in range(NUM_WHITE_KEYS):
         if black_key_pattern[i % 7] and i < NUM_WHITE_KEYS -1:
-            if black_key_idx_counter < NUM_BLACK_KEYS: black_key_x = (i + 1) * white_key_width - (black_key_width // 2); black_key_rect = pygame.Rect(black_key_x, keyboard_y_start, black_key_width, black_key_height); draw_black_key(surface, black_key_rect, SHADOW_OFFSET, black_key_pressed_states[black_key_idx_counter]); black_key_idx_counter += 1
-            else: print(f"Warning: Attempting to draw more black keys than defined by NUM_BLACK_KEYS ({NUM_BLACK_KEYS})")
+            if black_key_idx_counter < NUM_BLACK_KEYS:
+                black_key_x = (i + 1) * white_key_width - (black_key_width // 2); black_key_rect = pygame.Rect(black_key_x, keyboard_y_start, black_key_width, black_key_height)
+                last_drawn_black_key_rects.append(black_key_rect)
+                draw_black_key(surface, black_key_rect, SHADOW_OFFSET, black_key_pressed_states[black_key_idx_counter]); black_key_idx_counter += 1
 clock = pygame.time.Clock(); running = True
 while running:
-    dt_ms = clock.get_time() # Get delta time for star updates
+    dt_ms = clock.get_time()
     for event in pygame.event.get():
         if event.type == pygame.QUIT: running = False
         if event.type == pygame.KEYDOWN:
@@ -363,6 +387,14 @@ while running:
                         key_type_flash, key_idx_flash = get_key_type_and_index_for_midi(pressed_midi, KEYBOARD_START_MIDI_NOTE, NUM_WHITE_KEYS, NUM_BLACK_KEYS)
                         if key_type_flash == 'white': white_key_pressed_states[key_idx_flash] = True
                         elif key_type_flash == 'black': black_key_pressed_states[key_idx_flash] = True
+
+                        key_rect = get_rect_for_midi_note(pressed_midi)
+                        if key_rect:
+                            active_shockwaves.append({
+                                'center_x': key_rect.centerx, 'center_y': key_rect.centery,
+                                'start_time_ms': pygame.time.get_ticks(), 'max_radius': white_key_width * 2.0,
+                                'duration_ms': 2000, 'color': ACCENT_COLOR_CYAN })
+
                         if learning_mode_state['correctly_pressed_midi_in_pause'] == expected_midi_notes_set:
                             song_time_at_last_event = current_song_time_seconds; real_ticks_at_last_event = pygame.time.get_ticks()
                             for note_info_completed in learning_mode_state['notes_at_pause']:
@@ -428,7 +460,7 @@ while running:
             elif dragging_volume_slider and volume_slider_props.get('rect'):
                 slider_rect = volume_slider_props['rect']; click_ratio = max(0.0, min(1.0, (mouse_pos_motion[0] - slider_rect.left) / slider_rect.width)); min_val, max_val = volume_slider_props['value_range']; global_volume = min_val + click_ratio * (max_val - min_val); set_global_application_volume(global_volume)
 
-    update_stars(stars, dt_ms) # Update star animations
+    update_stars(stars, dt_ms)
 
     if song_playback_status == 'PLAYING':
         real_elapsed_ticks_since_event = pygame.time.get_ticks() - real_ticks_at_last_event
@@ -462,8 +494,11 @@ while running:
                     elif key_type_pres == 'black': black_key_pressed_states[key_idx_pres] = False
 
     screen.fill(BACKGROUND_COLOR)
-    draw_stars(screen, stars) # Draw stars first
-    draw_control_panel(screen, control_panel_buttons, sliders_list, progress_bar_props, current_mode, APP_MODES, pygame.mouse.get_pos(), current_song_time_seconds, total_song_duration_seconds, base_bpm)
+    draw_stars(screen, stars)
+    draw_control_panel(screen, control_panel_buttons, sliders_list, progress_bar_props,
+                       current_mode, APP_MODES, pygame.mouse.get_pos(),
+                       current_song_time_seconds, total_song_duration_seconds, base_bpm,
+                       dragging_tempo_slider, dragging_volume_slider)
     if current_mode == APP_MODES['PRESENTATION'] or current_mode == APP_MODES['LEARNING']:
         time_for_roll = learning_mode_state['paused_at_time'] if current_mode == APP_MODES['LEARNING'] and learning_mode_state['paused_at_time'] is not None else current_song_time_seconds
         if pixels_per_second > 0:
@@ -475,10 +510,11 @@ while running:
                     semitone = note['midi_note'] % 12; white_note_semitones = [0, 2, 4, 5, 7, 9, 11]; is_white_note = semitone in white_note_semitones
                     rect_width = white_key_width * NOTE_RECT_WIDTH_WHITE_RATIO if is_white_note else black_key_width * NOTE_RECT_WIDTH_BLACK_RATIO
                     rect_left_x = x_center - (rect_width / 2); time_offset_sec_roll = note['start_time'] - time_for_roll; y_offset_px_roll = time_offset_sec_roll * pixels_per_second
-                    note_bottom_y_on_roll = PIANO_ROLL_BOTTOM_Y - y_offset_px_roll; note_height_px = note['duration'] * pixels_per_second; note_top_y_on_roll = note_bottom_y_on_roll - note_height_px
+                    note_bottom_y_on_roll = PIANO_ROLL_BOTTOM_Y - y_offset_px_roll; note_height_px = note['duration'] * px_per_sec; note_top_y_on_roll = note_bottom_y_on_roll - note_height_px
                     visible_top_y = max(note_top_y_on_roll, PIANO_ROLL_TOP_Y); visible_bottom_y = min(note_bottom_y_on_roll, PIANO_ROLL_BOTTOM_Y); visible_height = visible_bottom_y - visible_top_y
                     if visible_height > 0: note_rect = pygame.Rect(rect_left_x, visible_top_y, rect_width, visible_height); pygame.draw.rect(screen, NOTE_RECT_COLOR, note_rect); pygame.draw.rect(screen, NOTE_RECT_BORDER_COLOR, note_rect, 1)
     draw_piano(screen, white_key_pressed_states, black_key_pressed_states)
+    manage_shockwaves(screen, active_shockwaves, pygame.time.get_ticks(), KEYBOARD_RENDER_AREA_RECT) # Added this call
     if feedback_flash_info['key_midi'] is not None and feedback_flash_info['end_time_ms'] > pygame.time.get_ticks():
         flash_info = feedback_flash_info; key_type_f, key_idx_f = get_key_type_and_index_for_midi(flash_info['key_midi'], KEYBOARD_START_MIDI_NOTE, NUM_WHITE_KEYS, NUM_BLACK_KEYS)
         if key_type_f is not None:
